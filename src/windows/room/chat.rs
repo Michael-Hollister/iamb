@@ -12,14 +12,16 @@ use tokio;
 use matrix_sdk::{
     attachment::AttachmentConfig,
     media::{MediaFormat, MediaRequest},
-    room::{Joined, Room as MatrixRoom},
+    // room::{Joined, Room as MatrixRoom},
+    room::{Room as MatrixRoom},
     ruma::{
-        events::reaction::{ReactionEventContent, Relation as Reaction},
+        // events::reaction::{ReactionEventContent, Relation as Reaction},
+        events::reaction::{ReactionEventContent},
         events::room::message::{
             MessageType,
             OriginalRoomMessageEvent,
             Relation,
-            Replacement,
+            // Replacement,
             RoomMessageEventContent,
             TextMessageEventContent,
         },
@@ -28,6 +30,8 @@ use matrix_sdk::{
         RoomId,
     },
 };
+
+use crate::base::EventLocation::Reaction;
 
 use modalkit::{
     input::dialog::PromptYesNo,
@@ -124,8 +128,10 @@ impl ChatState {
         }
     }
 
-    fn get_joined(&self, worker: &Requester) -> Result<Joined, IambError> {
-        worker.client.get_joined_room(self.id()).ok_or(IambError::NotJoined)
+    // fn get_joined(&self, worker: &Requester) -> Result<Joined, IambError> {
+    fn get_joined(&self, worker: &Requester) -> Result<matrix_sdk::Room, IambError> {
+        // worker.client.get_joined_room(self.id()).ok_or(IambError::NotJoined)
+        worker.client.get_room(self.id()).ok_or(IambError::NotJoined)
     }
 
     fn get_reply_to<'a>(&self, info: &'a RoomInfo) -> Option<&'a OriginalRoomMessageEvent> {
@@ -327,7 +333,8 @@ impl ChatState {
                     },
                 };
 
-                let reaction = Reaction::new(event_id, emoji);
+                // let reaction = Reaction::new(event_id, emoji);
+                let reaction  = matrix_sdk::ruma::events::relation::Annotation::new(event_id, emoji);
                 let msg = ReactionEventContent::new(reaction);
                 let _ = room.send(msg, None).await.map_err(IambError::from)?;
 
@@ -424,7 +431,8 @@ impl ChatState {
             .application
             .worker
             .client
-            .get_joined_room(self.id())
+            // .get_joined_room(self.id())
+            .get_room(self.id())
             .ok_or(IambError::NotJoined)?;
         let info = store.application.rooms.get_or_default(self.id().to_owned());
         let mut show_echo = true;
@@ -444,15 +452,20 @@ impl ChatState {
                 let mut msg = text_to_message(msg);
 
                 if let Some((_, event_id)) = &self.editing {
-                    msg.relates_to = Some(Relation::Replacement(Replacement::new(
+                    // msg.relates_to = Some(Relation::Replacement(Replacement::new(
+                    //     event_id.clone(),
+                    //     Box::new(msg.clone()),
+                    // )));
+                    msg.relates_to = Some(Relation::Replacement(matrix_sdk::ruma::events::relation::Replacement::new(
                         event_id.clone(),
-                        Box::new(msg.clone()),
+                        msg.clone().into(),
                     )));
 
                     show_echo = false;
                 } else if let Some(m) = self.get_reply_to(info) {
                     // XXX: Switch to RoomMessageEventContent::reply() once it's stable?
-                    msg = msg.make_reply_to(m);
+                    // msg = msg.make_reply_to(m);
+                    msg = msg.make_reply_to(m, matrix_sdk::ruma::events::room::message::ForwardThread::Yes, matrix_sdk::ruma::events::room::message::AddMentions::No);
                 }
 
                 // XXX: second parameter can be a locally unique transaction id.
@@ -477,7 +490,8 @@ impl ChatState {
                 let config = AttachmentConfig::new();
 
                 let resp = room
-                    .send_attachment(name.as_ref(), &mime, bytes.as_ref(), config)
+                    // .send_attachment(name.as_ref(), &mime, bytes.as_ref(), config)
+                    .send_attachment(name.as_ref(), &mime, bytes, config)
                     .await
                     .map_err(IambError::from)?;
 
@@ -507,7 +521,8 @@ impl ChatState {
                 let config = AttachmentConfig::new();
 
                 let resp = room
-                    .send_attachment(name.as_ref(), &mime, bytes.as_ref(), config)
+                    // .send_attachment(name.as_ref(), &mime, bytes.as_ref(), config)
+                    .send_attachment(name.as_ref(), &mime, bytes, config)
                     .await
                     .map_err(IambError::from)?;
 

@@ -1,5 +1,7 @@
 use matrix_sdk::{
-    room::{Invited, Room as MatrixRoom},
+    // room::{Invited, Room as MatrixRoom},
+    room::{Room as MatrixRoom},
+    RoomState::Invited,
     ruma::{
         events::{
             room::{name::RoomNameEventContent, topic::RoomTopicEventContent},
@@ -124,7 +126,8 @@ impl RoomState {
 
     fn draw_invite(
         &self,
-        invited: Invited,
+        // invited: Invited,
+        invited: matrix_sdk::Room,
         area: Rect,
         buf: &mut Buffer,
         store: &mut ProgramStore,
@@ -187,12 +190,16 @@ impl RoomState {
     ) -> IambResult<Vec<(Action<IambInfo>, ProgramContext)>> {
         match act {
             RoomAction::InviteAccept => {
-                if let Some(room) = store.application.worker.client.get_invited_room(self.id()) {
-                    let details = room.invite_details().await.map_err(IambError::from)?;
-                    let details = details.invitee.event().original_content();
-                    let is_direct = details.and_then(|ev| ev.is_direct).unwrap_or_default();
+                // if let Some(room) = store.application.worker.client.get_invited_room(self.id()) {
+                    if let Some(room) = store.application.worker.client.get_room(self.id()) {
+                    // MSC invite testing
+                    // let details = room.invite_details().await.map_err(IambError::from)?;
+                    // let details = details.invitee.event().original_content();
+                    // let is_direct = details.and_then(|ev| ev.is_direct).unwrap_or_default();
+                    let is_direct = false;
 
-                    room.accept_invitation().await.map_err(IambError::from)?;
+                    // room.accept_invitation().await.map_err(IambError::from)?;
+                    room.join().await.map_err(IambError::from)?;
 
                     if is_direct {
                         room.set_is_direct(true).await.map_err(IambError::from)?;
@@ -204,8 +211,10 @@ impl RoomState {
                 }
             },
             RoomAction::InviteReject => {
-                if let Some(room) = store.application.worker.client.get_invited_room(self.id()) {
-                    room.reject_invitation().await.map_err(IambError::from)?;
+                // if let Some(room) = store.application.worker.client.get_invited_room(self.id()) {
+                if let Some(room) = store.application.worker.client.get_room(self.id()) {
+                    // room.reject_invitation().await.map_err(IambError::from)?;
+                    room.leave().await.map_err(IambError::from)?;
 
                     Ok(vec![])
                 } else {
@@ -213,7 +222,8 @@ impl RoomState {
                 }
             },
             RoomAction::InviteSend(user) => {
-                if let Some(room) = store.application.worker.client.get_joined_room(self.id()) {
+                // if let Some(room) = store.application.worker.client.get_joined_room(self.id()) {
+                if let Some(room) = store.application.worker.client.get_room(self.id()) {
                     room.invite_user_by_id(user.as_ref()).await.map_err(IambError::from)?;
 
                     Ok(vec![])
@@ -222,7 +232,8 @@ impl RoomState {
                 }
             },
             RoomAction::Leave(skip_confirm) => {
-                if let Some(room) = store.application.worker.client.get_joined_room(self.id()) {
+                // if let Some(room) = store.application.worker.client.get_joined_room(self.id()) {
+                if let Some(room) = store.application.worker.client.get_room(self.id()) {
                     if skip_confirm {
                         room.leave().await.map_err(IambError::from)?;
 
@@ -282,7 +293,8 @@ impl RoomState {
 
                 match field {
                     RoomField::Name => {
-                        let ev = RoomNameEventContent::new(None);
+                        // let ev = RoomNameEventContent::new(None);
+                        let ev = RoomNameEventContent::new("None".to_string());
                         let _ = room.send_state_event(ev).await.map_err(IambError::from)?;
                     },
                     RoomField::Tag(tag) => {
@@ -391,12 +403,15 @@ impl TerminalCursor for RoomState {
 
 impl WindowOps<IambInfo> for RoomState {
     fn draw(&mut self, area: Rect, buf: &mut Buffer, focused: bool, store: &mut ProgramStore) {
-        if let MatrixRoom::Invited(_) = self.room() {
+        // if let MatrixRoom::Invited(_) = self.room() {
             self.refresh_room(store);
-        }
+        // }
 
-        if let MatrixRoom::Invited(invited) = self.room() {
-            self.draw_invite(invited.clone(), area, buf, store);
+        // if let MatrixRoom::Invited(invited) = self.room() {
+        //     self.draw_invite(invited.clone(), area, buf, store);
+        // }
+        if self.room().state() == matrix_sdk::RoomState::Invited {
+            self.draw_invite(self.room().clone(), area, buf, store);
         }
 
         match self {

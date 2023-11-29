@@ -32,7 +32,7 @@ use matrix_sdk::ruma::{
             redaction::SyncRoomRedactionEvent,
         },
         AnyMessageLikeEvent,
-        Redact,
+        // Redact,
         RedactedUnsigned,
     },
     EventId,
@@ -42,6 +42,8 @@ use matrix_sdk::ruma::{
     RoomVersionId,
     UInt,
 };
+
+use crate::base::MessageAction::Redact;
 
 use modalkit::tui::{
     style::{Modifier as StyleModifier, Style},
@@ -413,8 +415,8 @@ impl MessageEvent {
             MessageEvent::Redacted(_) => return,
             MessageEvent::Local(_, _) => return,
             MessageEvent::Original(ev) => {
-                let redacted = ev.clone().redact(redaction, version);
-                *self = MessageEvent::Redacted(Box::new(redacted));
+                // let redacted = ev.clone().redact(redaction, version);
+                // *self = MessageEvent::Redacted(Box::new(redacted));
             },
         }
     }
@@ -449,17 +451,17 @@ fn body_cow_content(content: &RoomMessageEventContent) -> Cow<'_, str> {
 }
 
 fn body_cow_reason(unsigned: &RedactedUnsigned) -> Cow<'_, str> {
-    let reason = unsigned
-        .redacted_because
-        .as_ref()
-        .and_then(|e| e.as_original())
-        .and_then(|r| r.content.reason.as_ref());
+    // let reason = unsigned
+    //     .redacted_because
+    //     .as_ref()
+    //     .and_then(|e| e.as_original())
+    //     .and_then(|r| r.content.reason.as_ref());
 
-    if let Some(r) = reason {
-        Cow::Owned(format!("[Redacted: {r:?}]"))
-    } else {
+    // if let Some(r) = reason {
+    //     Cow::Owned(format!("[Redacted: {r:?}]"))
+    // } else {
         Cow::Borrowed("[Redacted]")
-    }
+    // }
 }
 
 enum MessageColumns {

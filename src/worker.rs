@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use std::convert::TryFrom;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 
 use futures::{stream::FuturesUnordered, StreamExt};
 use gethostname::gethostname;
+use matrix_sdk::matrix_auth::LoginBuilder;
+use matrix_sdk::ruma::{SigningKeyAlgorithm, KeyName};
+use matrix_sdk::ruma::serde::Base64;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tracing::{error, warn};
@@ -19,7 +22,9 @@ use matrix_sdk::{
     encryption::verification::{SasVerification, Verification},
     event_handler::Ctx,
     reqwest,
-    room::{Invited, Messages, MessagesOptions, Room as MatrixRoom, RoomMember},
+    RoomState::Invited,
+    room::{Messages, MessagesOptions, Room as MatrixRoom, RoomMember},
+    // room::{Invited, Messages, MessagesOptions, Room as MatrixRoom, RoomMember},
     ruma::{
         api::client::{
             room::create_room::v3::{CreationContent, Request as CreateRoomRequest, RoomPreset},
@@ -66,7 +71,8 @@ use matrix_sdk::{
     },
     Client,
     DisplayName,
-    Session,
+    // Session,
+    matrix_auth::MatrixSession,
 };
 
 use modalkit::editing::action::{EditInfo, InfoMessage, UIError};
@@ -141,30 +147,177 @@ pub async fn create_room(
         initial_state.push(encr_raw);
     }
 
-    let request = assign!(CreateRoomRequest::new(), {
-        room_alias_name,
-        creation_content,
-        initial_state: initial_state.as_slice(),
-        invite: invite.as_slice(),
-        is_direct,
-        visibility,
-        preset,
-    });
+    // let request = assign!(CreateRoomRequest::new(), {
+    //     room_alias_name,
+    //     creation_content,
+    //     initial_state: initial_state.as_slice(),
+    //     invite: invite.as_slice(),
+    //     is_direct,
+    //     visibility,
+    //     preset,
+    // });
+
+    let mut request = CreateRoomRequest::new();
+    // request.room_alias_name = Some(room_alias_name.unwrap_or_default().to_string());
+    if room_alias_name.is_some() {
+        request.room_alias_name = Some(room_alias_name.unwrap_or_default().to_string());
+    }
+
+    // msc3917
+    // request.creation_content = creation_content;
+    let mut content = CreationContent::new();
+
+
+    let rrk_bytes = matrix_sdk::ruma::signatures::Ed25519KeyPair::generate().unwrap();
+    let rrk = matrix_sdk::ruma::signatures::Ed25519KeyPair::from_der(&rrk_bytes, "1".into()).unwrap();
+
+    let identity = client.encryption().get_user_identity(&client.user_id().unwrap()).await.unwrap().unwrap();
+    let rsk = identity.room_signing_key();
+
+    let rrk_str = Base64::<matrix_sdk::ruma::serde::base64::Standard>::new(rrk.public_key().to_vec()).to_string();
+    content.room_root_key = Some(rrk_str);
+    content.creator_key = Some(identity.master_key().get_first_key().unwrap().to_base64());
+
+    // have to set room_version since its being added by the server?
+    content.room_version = Some(RoomVersionId::V12);
+
+    // content.creator_key = Some(rsk.get_first_key().unwrap().to_base64());
+
+    // invite tests
+    let test_user_id = <&matrix_sdk::ruma::UserId>::try_from("@futotest-2:localhost").unwrap().to_owned();
+    // let test_keyname = KeyName("1");
+    // let test_keyname = KeyName { 0: "afsd" };
+    content.invited_user_keys = Some(BTreeMap::from([(test_user_id.to_owned(), BTreeMap::from([(matrix_sdk::ruma::KeyId::from_parts(SigningKeyAlgorithm::Ed25519, "1".into()), "WRONG_KEY_TEST".to_string())]))]));
+
+    let mut json_content: matrix_sdk::ruma::CanonicalJsonValue = std::convert::TryInto::try_into(serde_json::to_value(content).unwrap()).unwrap();
+    let mut json_object = json_content.as_object().unwrap().clone();
+    // let mut json_content = Raw::new(&content).map_err(IambError::from)?;
+
+    // use rand::rngs::OsRng;
+    // use ed25519_dalek::SigningKey;
+    // use ed25519_dalek::Signature;
+
+    // let mut csprng = OsRng;
+    // let signing_key: SigningKey = SigningKey::generate(&mut csprng);
+
+
+
+
+    // println!("SIGNED JSON OBJECT==> {:?}", json_object);
+    matrix_sdk::ruma::signatures::sign_json(client.user_id().unwrap().as_str(), &rrk, &mut json_object);
+    let json_content_signed = matrix_sdk::ruma::CanonicalJsonValue::Object(json_object.clone());
+
+
+    // panic!("BEFORE DESERIALIZE JSON: {:?}", json_content_signed);
+    // panic!("BEFORE DESERIALIZE JSON STR: {:?}", json_content_signed.as_str().unwrap());
+
+    // let final_cc = serde_json::Deserializer::<CreationContent>::from(json_object);
+    // let final_cc: CreationContent = serde_json::from_str(json_content_signed.as_str().unwrap()).unwrap();
+
+    let json_str = json_content_signed.to_string().replace("signatures", "org.matrix.msc3917.v1.signatures");
+
+
+    // println!("orig==> {:?}", json_str);
+    // println!("new==> {:?}", final_cc);
+
+    let mut final_cc: CreationContent = serde_json::from_str(json_str.as_str()).unwrap();
+    // final_cc.signatures = Some(BTreeMap::from([(client.user_id().unwrap().to_owned(), BTreeMap::from([(matrix_sdk::ruma::DeviceKeyId::from_parts(matrix_sdk::ruma::DeviceKeyAlgorithm::Ed25519, "NEWID".into()), "FALSE SIGNATURE".to_owned())]))]));
+
+
+    // println!("orig==> {:?}", json_str);
+    // println!("new==> {:?}", final_cc.to_owned());
+
+    // let mut json_content_sig: matrix_sdk::ruma::CanonicalJsonValue = std::convert::TryInto::try_into(serde_json::to_value(final_cc.to_owned()).unwrap()).unwrap();
+    // let mut json_object_sig = json_content_sig.as_object().unwrap().clone();
+    // matrix_sdk::ruma::signatures::sign_json(client.user_id().unwrap().as_str(), &rrk, &mut json_object_sig);
+
+    // println!("new==>  with sig {:?}", json_object_sig.to_owned());
+
+    // println!("INFO");
+    // println!("{:?}", final_cc);
+    let raw_cc = Raw::new(&final_cc).map_err(IambError::from)?;
+    // let raw_cc = Raw::new(&json_content_signed).map_err(IambError::from)?;
+
+    request.creation_content = Some(raw_cc);
+    request.room_version = Some(RoomVersionId::V12);
+
+    // testing invite lists
+
+    let mut invite_list = Vec::new();
+    invite_list.push(test_user_id);
+    request.invite = invite_list;
+
+    // use ed25519_dalek::{Signature, Signer};
+
+    // # Examples
+    //
+    // A homeserver signs JSON with a key pair:
+    //
+    // ```rust
+    // # use ruma_common::serde::base64::Base64;
+    // #
+    // const PKCS8: &str = "\
+    //     MFECAQEwBQYDK2VwBCIEINjozvdfbsGEt6DD+7Uf4PiJ/YvTNXV2mIPc/\
+    //     tA0T+6tgSEA3TPraTczVkDPTRaX4K+AfUuyx7Mzq1UafTXypnl0t2k\
+    // ";
+    //
+    // let document: Base64 = Base64::parse(PKCS8).unwrap();
+    //
+    // // Create an Ed25519 key pair.
+    // let key_pair = ruma_signatures::Ed25519KeyPair::from_der(
+    //     document.as_bytes(),
+    //     "1".into(), // The "version" of the key.
+    // )
+    // .unwrap();
+    //
+    // // Deserialize some JSON.
+    // let mut value = serde_json::from_str("{}").unwrap();
+    //
+    // // Sign the JSON with the key pair.
+    // assert!(ruma_signatures::sign_json("domain", &key_pair, &mut value).is_ok());
+    // ```
+    //
+    // This will modify the JSON from an empty object to a structure like this:
+    //
+    // ```json
+    // {
+    //     "signatures": {
+    //         "domain": {
+    //             "ed25519:1": "K8280/U9SSy9IVtjBuVeLr+HpOB4BQFWbg+UZaADMtTdGYI7Geitb76LTrr5QV/7Xg4ahLwYGYZzuHGZKM5ZAQ"
+    //         }
+    //     }
+    // }
+    // ```
+
+    // signing_key.
+    // matrix_sdk::ruma::signatures::Ed25519KeyPair::n
+    // matrix_sdk::ruma::signatures::sign_json(entity_id, key_pair, object)
+
+
+
+    request.initial_state = initial_state;
+    request.invite = invite;
+    request.is_direct = is_direct;
+    request.visibility = visibility;
+    request.preset = preset;
 
     let resp = client.create_room(request).await.map_err(IambError::from)?;
 
     if is_direct {
-        if let Some(room) = client.get_room(&resp.room_id) {
+        // if let Some(room) = client.get_room(&resp.room_id) {
+        if let Some(room) = client.get_room(&resp.room_id()) {
             room.set_is_direct(true).await.map_err(IambError::from)?;
         } else {
             error!(
-                room_id = resp.room_id.as_str(),
+                // room_id = resp.room_id.as_str(),
+                room_id = resp.room_id().as_str(),
                 "Couldn't set is_direct for new direct message room"
             );
         }
     }
 
-    return Ok(resp.room_id);
+    // return Ok(resp.room_id);
+    return Ok(resp.room_id().to_owned());
 }
 
 async fn load_plan(store: &AsyncProgramStore) -> HashMap<OwnedRoomId, Option<String>> {
@@ -303,7 +456,8 @@ async fn refresh_rooms(client: &Client, store: &AsyncProgramStore) {
         let name = room.display_name().await.unwrap_or(DisplayName::Empty).to_string();
         names.push((room.room_id().to_owned(), name));
 
-        if room.is_direct() {
+        // if room.is_direct() {
+        if room.is_direct().await.unwrap_or(false) {
             let tags = room.tags().await.unwrap_or_default();
 
             dms.push(Arc::new((room.into(), tags)));
@@ -320,7 +474,8 @@ async fn refresh_rooms(client: &Client, store: &AsyncProgramStore) {
         let name = room.display_name().await.unwrap_or(DisplayName::Empty).to_string();
         names.push((room.room_id().to_owned(), name));
 
-        if room.is_direct() {
+        // if room.is_direct() {
+        if room.is_direct().await.unwrap_or(false) {
             let tags = room.tags().await.unwrap_or_default();
 
             dms.push(Arc::new((room.into(), tags)));
@@ -371,8 +526,10 @@ async fn refresh_receipts_forever(client: &Client, store: &AsyncProgramStore) {
                 }
             }
 
-            if let Some(room) = client.get_joined_room(&room_id) {
-                if room.read_receipt(&read_till).await.is_ok() {
+            // if let Some(room) = client.get_joined_room(&room_id) {
+            if let Some(room) = client.get_room(&room_id) {
+                // if room.read_receipt(&read_till).await.is_ok() {
+                if room.send_single_receipt(matrix_sdk::ruma::api::client::receipt::create_receipt::v3::ReceiptType::FullyRead, matrix_sdk::ruma::events::receipt::ReceiptThread::Unthreaded, read_till.clone()).await.is_ok() {
                     sent.insert(room_id, read_till);
                 }
             }
@@ -382,7 +539,8 @@ async fn refresh_receipts_forever(client: &Client, store: &AsyncProgramStore) {
 
 #[derive(Debug)]
 pub enum LoginStyle {
-    SessionRestore(Session),
+    // SessionRestore(Session),
+    SessionRestore(MatrixSession),
     Password(String),
 }
 
@@ -417,7 +575,8 @@ async fn update_receipts(client: &Client) -> Vec<(OwnedRoomId, Receipts)> {
             let mut receipts = Receipts::new();
 
             for member in users {
-                let res = room.user_read_receipt(member.user_id()).await;
+                // let res = room.user_read_receipt(member.user_id()).await;
+                let res = room.user_receipt(matrix_sdk::ruma::events::receipt::ReceiptType::Read, matrix_sdk::ruma::events::receipt::ReceiptThread::Unthreaded, member.user_id()).await;
 
                 if let Ok(Some((event_id, _))) = res {
                     let user_id = member.user_id().to_owned();
@@ -437,7 +596,8 @@ pub type FetchedRoom = (MatrixRoom, DisplayName, Option<Tags>);
 pub enum WorkerTask {
     Init(AsyncProgramStore, ClientReply<()>),
     Login(LoginStyle, ClientReply<IambResult<EditInfo>>),
-    GetInviter(Invited, ClientReply<IambResult<Option<RoomMember>>>),
+    // GetInviter(Invited, ClientReply<IambResult<Option<RoomMember>>>),
+    GetInviter(matrix_sdk::Room, ClientReply<IambResult<Option<RoomMember>>>),
     GetRoom(OwnedRoomId, ClientReply<IambResult<FetchedRoom>>),
     JoinRoom(String, ClientReply<IambResult<OwnedRoomId>>),
     Members(OwnedRoomId, ClientReply<IambResult<Vec<RoomMember>>>),
@@ -532,7 +692,8 @@ impl Requester {
         return response.recv();
     }
 
-    pub fn get_inviter(&self, invite: Invited) -> IambResult<Option<RoomMember>> {
+    // pub fn get_inviter(&self, invite: Invited) -> IambResult<Option<RoomMember>> {
+    pub fn get_inviter(&self, invite: matrix_sdk::Room) -> IambResult<Option<RoomMember>> {
         let (reply, response) = oneshot();
 
         self.tx.send(WorkerTask::GetInviter(invite, reply)).unwrap();
@@ -622,10 +783,12 @@ impl ClientWorker {
 
         // Set up the Matrix client for the selected profile.
         let client = Client::builder()
-            .http_client(Arc::new(http))
+            // .http_client(Arc::new(http))
+            .http_client(http)
             .homeserver_url(account.url.clone())
-            .sled_store(settings.matrix_dir.as_path(), None)
-            .expect("Failed to setup up sled store for Matrix SDK")
+            .sqlite_store(settings.matrix_dir.as_path(), None)
+            // .sled_store(settings.matrix_dir.as_path(), None)
+            // .expect("Failed to setup up sled store for Matrix SDK")
             .request_config(req_config)
             .build()
             .await
@@ -745,13 +908,14 @@ impl ClientWorker {
              store: Ctx<AsyncProgramStore>| {
                 async move {
                     if let SyncStateEvent::Original(ev) = ev {
-                        if let Some(room_name) = ev.content.name {
+                        // if let Some(room_name) = ev.content.name {
+                            let room_name = ev.content.name;
                             let room_id = room.room_id().to_owned();
                             let room_name = Some(room_name.to_string());
                             let mut locked = store.lock().await;
                             let mut info = locked.application.rooms.get_or_default(room_id.clone());
                             info.name = room_name;
-                        }
+                        // }
                     }
                 }
             },
@@ -818,22 +982,22 @@ impl ClientWorker {
                     let mut locked = store.lock().await;
                     let info = locked.application.get_room_info(room_id.to_owned());
 
-                    match info.keys.get(&ev.redacts) {
-                        None => return,
-                        Some(EventLocation::Message(key)) => {
-                            if let Some(msg) = info.messages.get_mut(key) {
-                                let ev = SyncRoomRedactionEvent::Original(ev);
-                                msg.redact(ev, room_version);
-                            }
-                        },
-                        Some(EventLocation::Reaction(event_id)) => {
-                            if let Some(reactions) = info.reactions.get_mut(event_id) {
-                                reactions.remove(&ev.redacts);
-                            }
+                    // match info.keys.get(&ev.redacts) {
+                    //     None => return,
+                    //     Some(EventLocation::Message(key)) => {
+                    //         if let Some(msg) = info.messages.get_mut(key) {
+                    //             let ev = SyncRoomRedactionEvent::Original(ev);
+                    //             msg.redact(ev, room_version);
+                    //         }
+                    //     },
+                    //     Some(EventLocation::Reaction(event_id)) => {
+                    //         if let Some(reactions) = info.reactions.get_mut(event_id) {
+                    //             reactions.remove(&ev.redacts);
+                    //         }
 
-                            info.keys.remove(&ev.redacts);
-                        },
-                    }
+                    //         info.keys.remove(&ev.redacts);
+                    //     },
+                    // }
                 }
             },
         );
@@ -1003,18 +1167,28 @@ impl ClientWorker {
 
         match style {
             LoginStyle::SessionRestore(session) => {
-                client.restore_login(session).await.map_err(IambError::from)?;
+                // client.restore_login(session).await.map_err(IambError::from)?;
+                client.restore_session(session).await.map_err(IambError::from)?;
             },
             LoginStyle::Password(password) => {
-                let resp = client
+                let mut resp = client
+                    .matrix_auth()
                     .login_username(&self.settings.profile.user_id, &password)
                     .initial_device_display_name(initial_devname().as_str())
                     .send()
                     .await
                     .map_err(IambError::from)?;
+
+                // let resp = client
+                //     .login_username(&self.settings.profile.user_id, &password)
+                //     .initial_device_display_name(initial_devname().as_str())
+                //     .send()
+                //     .await
+                //     .map_err(IambError::from)?;
                 let file = File::create(self.settings.session_json.as_path())?;
                 let writer = BufWriter::new(file);
-                let session = Session::from(resp);
+                // let session = MatrixSession::from(resp);
+                let session = MatrixSession::from(&resp);
                 serde_json::to_writer(writer, &session).map_err(IambError::from)?;
             },
         }
@@ -1033,7 +1207,8 @@ impl ClientWorker {
 
     async fn direct_message(&mut self, user: OwnedUserId) -> IambResult<OwnedRoomId> {
         for room in self.client.rooms() {
-            if !room.is_direct() {
+            // if !room.is_direct() {
+            if !room.is_direct().await.unwrap_or(false) {
                 continue;
             }
 
@@ -1057,7 +1232,8 @@ impl ClientWorker {
         })
     }
 
-    async fn get_inviter(&mut self, invited: Invited) -> IambResult<Option<RoomMember>> {
+    // async fn get_inviter(&mut self, invited: Invited) -> IambResult<Option<RoomMember>> {
+        async fn get_inviter(&mut self, invited: matrix_sdk::Room) -> IambResult<Option<RoomMember>> {
         let details = invited.invite_details().await.map_err(IambError::from)?;
 
         Ok(details.inviter)
@@ -1077,7 +1253,8 @@ impl ClientWorker {
     async fn join_room(&mut self, name: String) -> IambResult<OwnedRoomId> {
         if let Ok(alias_id) = OwnedRoomOrAliasId::from_str(name.as_str()) {
             match self.client.join_room_by_id_or_alias(&alias_id, &[]).await {
-                Ok(resp) => Ok(resp.room_id),
+                // Ok(resp) => Ok(resp.room_id),
+                Ok(resp) => Ok(resp.room_id().to_owned()),
                 Err(e) => {
                     let msg = e.to_string();
                     let err = UIError::Failure(msg);
@@ -1104,7 +1281,8 @@ impl ClientWorker {
     }
 
     async fn space_members(&mut self, space: OwnedRoomId) -> IambResult<Vec<OwnedRoomId>> {
-        let mut req = SpaceHierarchyRequest::new(&space);
+        // let mut req = SpaceHierarchyRequest::new(&space);
+        let mut req = SpaceHierarchyRequest::new(space.clone());
         req.limit = Some(1000u32.into());
         req.max_depth = Some(1u32.into());
 
@@ -1116,7 +1294,8 @@ impl ClientWorker {
     }
 
     async fn typing_notice(&mut self, room_id: OwnedRoomId) {
-        if let Some(room) = self.client.get_joined_room(room_id.as_ref()) {
+        // if let Some(room) = self.client.get_joined_room(room_id.as_ref()) {
+        if let Some(room) = self.client.get_room(room_id.as_ref()) {
             let _ = room.typing_notice(true).await;
         }
     }
@@ -1180,8 +1359,41 @@ impl ClientWorker {
                 Ok(Some(InfoMessage::from(info)))
             },
             None => {
-                let msg = format!("Could not find identity information for {user_id}");
+                let msg = format!("Could not find identity information for {user_id}, msc3917 bootstraping keys");
                 let err = UIError::Failure(msg);
+
+                // testing out msc3917
+                // use std::collections::BTreeMap;
+                use matrix_sdk::{ruma::api::client::uiaa, Client};
+                // use url::Url;
+                // use serde_json::json;
+
+                // # async {
+                // let homeserver = Url::parse("http://example.com")?;
+                // let client = Client::new(homeserver).await?;
+                if let Err(e) = enc.bootstrap_cross_signing(None).await {
+                    if let Some(response) = e.as_uiaa_response() {
+                        let mut password = uiaa::Password::new(
+                            // uiaa::UserIdentifier::UserIdOrLocalpart("futotest-1".to_owned()),
+                            uiaa::UserIdentifier::UserIdOrLocalpart(self.client.user_id().unwrap().localpart().to_owned()),
+                            // "Futotest-1".to_owned(),
+                            self.client.user_id().unwrap().localpart().replace("f", "F").to_owned(),
+                        );
+                        password.session = response.session.clone();
+
+                        enc
+                            // .encryption()
+                            .bootstrap_cross_signing(Some(uiaa::AuthData::Password(password)))
+                            .await
+                            .expect("Couldn't bootstrap cross signing")
+                    } else {
+                        panic!("Error durign cross signing bootstrap {:#?}", e);
+                    }
+                }
+                // # anyhow::Ok(()) };
+
+
+                // enc.bootstrap_cross_signing(auth_data)
 
                 Err(err)
             },

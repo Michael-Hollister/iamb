@@ -53,13 +53,17 @@ unicode-width = "0.1.10"
 url = {version = "^2.2.2", features = ["serde"]}
 edit = "0.1.4"
 
+# custom testing
+# matrix-sdk = { version = "^0.6.2", path = "../matrix-rust-sdk/crates/matrix-sdk", default-features = false, features = ["e2e-encryption", "rustls-tls", "sqlite"] }
+matrix-sdk = { version = "^0.6.2", path = "../matrix-rust-sdk/crates/matrix-sdk", default-features = false, features = ["e2e-encryption", "rustls-tls", "sqlite", "automatic-room-key-forwarding", "unstable-msc3917"] }
+
 [dependencies.modalkit]
 version = "0.0.16"
 
-[dependencies.matrix-sdk]
-version = "^0.6.2"
-default-features = false
-features = ["e2e-encryption", "sled", "rustls-tls"]
+# [dependencies.matrix-sdk]
+# version = "^0.6.2"
+# default-features = false
+# features = ["e2e-encryption", "sled", "rustls-tls"]
 
 [dependencies.tokio]
 version = "1.24.1"

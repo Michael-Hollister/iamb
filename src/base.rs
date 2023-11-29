@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use emojis::Emoji;
+use matrix_sdk::ruma::events::room::message::RoomMessageEventContentWithoutRelation;
 use serde::{
     de::Error as SerdeError,
     de::Visitor,
@@ -21,7 +22,8 @@ use url::Url;
 
 use matrix_sdk::{
     encryption::verification::SasVerification,
-    room::{Joined, Room as MatrixRoom},
+    room::{Room as MatrixRoom},
+    // room::{Joined, Room as MatrixRoom},
     ruma::{
         events::{
             reaction::ReactionEvent,
@@ -29,7 +31,7 @@ use matrix_sdk::{
             room::message::{
                 OriginalRoomMessageEvent,
                 Relation,
-                Replacement,
+                // Replacement,
                 RoomMessageEvent,
                 RoomMessageEventContent,
             },
@@ -509,7 +511,10 @@ impl RoomInfo {
         }
     }
 
-    pub fn insert_edit(&mut self, msg: Replacement) {
+    // pub fn insert_edit(&mut self, msg: Replacement) {
+    // pub fn insert_edit(&mut self, msg: crate::base::Relation<) {
+    pub fn insert_edit(&mut self, msg: matrix_sdk::ruma::events::relation::Replacement<RoomMessageEventContentWithoutRelation>) {
+
         let event_id = msg.event_id;
         let new_content = msg.new_content;
 
@@ -696,8 +701,10 @@ impl ChatStore {
         }
     }
 
-    pub fn get_joined_room(&self, room_id: &RoomId) -> Option<Joined> {
-        self.worker.client.get_joined_room(room_id)
+    // pub fn get_joined_room(&self, room_id: &RoomId) -> Option<Joined> {
+    pub fn get_joined_room(&self, room_id: &RoomId) -> Option<matrix_sdk::Room> {
+        self.worker.client.get_room(room_id)
+        // self.worker.client.get_joined_room(room_id)
     }
 
     pub fn get_room_title(&self, room_id: &RoomId) -> String {
